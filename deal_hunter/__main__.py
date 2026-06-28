@@ -68,6 +68,10 @@ def main(argv: List[str] | None = None) -> int:
 
     if dry_run:
         print(f"Subject: {subject}\n\n{body}")
+    elif not listings and not drops:
+        # Nothing to report — skip the email (and the SMTP round-trip) entirely
+        # rather than send an empty digest or fail a run with no content.
+        log.info("no listings and no drops; skipping email")
     else:
         send_email(_smtp_from_env(), subject, body)
         log.info("digest sent: %s", subject)

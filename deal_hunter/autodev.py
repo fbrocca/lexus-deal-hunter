@@ -18,9 +18,8 @@ from .models import Listing
 
 log = logging.getLogger("deal_hunter.autodev")
 
-DEFAULT_BASE_URL = "https://auto.dev/api/listings"
-PAGE_SIZE = 100
-MAX_PAGES = 20  # safety cap: 2000 listings is far more than the NX 450h+ market
+DEFAULT_BASE_URL = "https://api.auto.dev/listings"
+MAX_PAGES = 30  # safety cap on cursor pagination
 
 
 class AutoDevClient:
@@ -38,49 +37,39 @@ class AutoDevClient:
         self.timeout = timeout
         self.session = session or requests.Session()
 
-    def _params(self, search: SearchConfig, model: str, page: int) -> dict:
-        params = {
-            "apikey": self.api_key,
-            "make": search.make,
-            "model": model,
-            "page": page,
-            "limit": PAGE_SIZE,
-        }
-        if search.year_min is not None:
-            params["year_min"] = search.year_min
-        if search.year_max is not None:
-            params["year_max"] = search.year_max
-        if search.price_max is not None:
-            params["price_max"] = search.price_max
-        if search.zip_code:
-            params["zip"] = search.zip_code
-        if search.radius_miles is not None:
-            params["radius"] = search.radius_miles
-        # Auto.dev uses condition=New/Used; omit for "all".
-        if search.condition in ("new", "used"):
-            params["condition"] = search.condition.capitalize()
-        return params
-
     def _fetch_model(self, search: SearchConfig, model: str) -> List[Mapping]:
+        """Fetch all pages for one model.
+
+        We query by only the two confirmed v2 params (`vehicle.make`,
+        `vehicle.model`) and apply every other filter client-side. The NX 450h+
+        market is small, so this is cheap and avoids returning zero rows from a
+        mistyped filter param. Pagination follows the cursor in `links.next`.
+        """
         records: List[Mapping] = []
-        for page in range(1, MAX_PAGES + 1):
+        url: str = self.base_url
+        params: Optional[dict] = {"vehicle.make": search.make, "vehicle.model": model}
+        for _ in range(MAX_PAGES):
             resp = self.session.get(
-                self.base_url,
-                params=self._params(search, model, page),
+                url,
+                params=params,
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 timeout=self.timeout,
             )
             resp.raise_for_status()
             payload = resp.json()
-            batch = payload.get("records") or payload.get("listings") or []
+            batch = payload.get("data") or payload.get("records") or payload.get("listings") or []
             if not batch:
                 break
             records.extend(batch)
-            total = payload.get("totalCount") or payload.get("total")
-            if total is not None and len(records) >= int(total):
+            nxt = (payload.get("links") or {}).get("next")
+            if not nxt:
                 break
-            if len(batch) < PAGE_SIZE:
-                break
+            # `next` may be a full URL or a bare cursor token.
+            if isinstance(nxt, str) and nxt.startswith("http"):
+                url, params = nxt, None
+            else:
+                url = self.base_url
+                params = {"vehicle.make": search.make, "vehicle.model": model, "cursor": nxt}
         log.info("autodev: model=%s returned %d row(s)", model, len(records))
         return records
 

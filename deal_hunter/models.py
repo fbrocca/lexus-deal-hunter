@@ -42,6 +42,29 @@ def _first(record: Mapping[str, Any], keys: Sequence[str]) -> Any:
     return None
 
 
+def flatten_record(record: Mapping[str, Any]) -> dict:
+    """Collapse Auto.dev's nested objects into one flat lookup.
+
+    v2 listings nest data under ``vehicle`` and ``retailListing`` objects
+    (e.g. ``vehicle.make``, ``retailListing.price``). We flatten scalar leaves
+    from those nested objects up to the top level so the candidate-key lookups
+    in ``from_record`` resolve regardless of where a field lives. Nested values
+    win over top-level scalars of the same name.
+    """
+    scalars: dict = {}
+    nested: dict = {}
+    for k, v in record.items():
+        if isinstance(v, dict):
+            for kk, vv in v.items():
+                if not isinstance(vv, (dict, list)):
+                    nested[kk] = vv
+        elif not isinstance(v, list):
+            scalars[k] = v
+    merged = dict(scalars)
+    merged.update(nested)
+    return merged
+
+
 @dataclass
 class Listing:
     vin: str
@@ -78,7 +101,8 @@ class Listing:
         return " ".join(p for p in parts if p).strip()
 
     @classmethod
-    def from_record(cls, r: Mapping[str, Any]) -> "Listing":
+    def from_record(cls, record: Mapping[str, Any]) -> "Listing":
+        r = flatten_record(record)
         raw_condition = str(_first(r, ["condition", "inventoryType", "type"]) or "").lower()
         if "new" in raw_condition:
             condition = "new"
