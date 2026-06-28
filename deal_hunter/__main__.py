@@ -59,7 +59,8 @@ def main(argv: List[str] | None = None) -> int:
     log.info("detected %d price drop(s)", len(drops))
 
     today = date.today().isoformat()
-    model_desc = f"{cfg.search.make} {cfg.search.models[0]} ({cfg.search.condition}), nationwide"
+    variant = f" {cfg.search.trim_contains}".rstrip()
+    model_desc = f"{cfg.search.make} {cfg.search.model}{variant} ({cfg.search.condition}), nationwide"
     subject, text, html = build_digest(
         cfg.email,
         cfg.thresholds,

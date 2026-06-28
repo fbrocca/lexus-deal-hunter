@@ -3,69 +3,46 @@ from deal_hunter.config import SearchConfig
 from deal_hunter.models import Listing
 
 
-def _l(model="NX", trim="", condition="New", year=2024, vin="V1", price="50000"):
-    return Listing.from_record(
-        {
-            "vin": vin,
-            "model": model,
-            "trim": trim,
-            "condition": condition,
-            "year": year,
-            "price": price,
-        }
-    )
+def _row(vin, price, msrp, year=2026, used=False, trim="450h+ Premium"):
+    return {
+        "vin": vin,
+        "vehicle": {"vin": vin, "make": "Lexus", "model": "NX", "trim": trim,
+                    "year": year, "baseMsrp": msrp},
+        "retailListing": {"price": price, "used": used, "dealer": "D",
+                          "city": "X", "state": "CA", "vdp": "http://d/" + vin},
+    }
 
 
 def _search(**kw):
-    base = dict(make="Lexus", models=["NX"], keywords=["450h"], condition="new", year_min=2022)
+    base = dict(make="Lexus", model="NX", trim_contains="450h", condition="new", year_min=2022)
     base.update(kw)
     return SearchConfig(**base)
 
 
-def test_keyword_isolates_450h_variant():
+# ----- apply_filters --------------------------------------------------------
+
+def test_apply_filters_condition_year_price_dedupe():
     listings = [
-        _l(trim="450h+ Luxury", vin="A"),   # keep
-        _l(trim="350h Premium", vin="B"),   # drop (350h)
-        _l(trim="250 Base", vin="C"),       # drop (250)
-        _l(model="NX 450h", trim="", vin="D"),  # keep (matches on model)
+        Listing.from_record(_row("A", 55999, 57810, 2026, False)),  # keep
+        Listing.from_record(_row("B", 50000, 57810, 2026, True)),   # drop: used
+        Listing.from_record(_row("C", 55000, 57810, 2021, False)),  # drop: year
+        Listing.from_record(_row("D", 90000, 95000, 2026, False)),  # drop: price
+        Listing.from_record(_row("A", 55999, 57810, 2026, False)),  # drop: dupe vin
     ]
-    kept = {l.vin for l in apply_filters(listings, _search())}
-    assert kept == {"A", "D"}
+    out = apply_filters(listings, _search(price_max=80000))
+    assert {l.vin for l in out} == {"A"}
 
 
-def test_condition_new_only():
-    listings = [
-        _l(trim="450h+", condition="New", vin="A"),
-        _l(trim="450h+", condition="Used", vin="B"),
-    ]
-    kept = {l.vin for l in apply_filters(listings, _search())}
-    assert kept == {"A"}
+def test_apply_filters_all_condition_keeps_used():
+    listings = [Listing.from_record(_row("B", 50000, 57810, 2026, True))]
+    assert len(apply_filters(listings, _search(condition="all"))) == 1
 
 
-def test_year_min_filter():
-    listings = [
-        _l(trim="450h+", year=2021, vin="A"),
-        _l(trim="450h+", year=2024, vin="B"),
-    ]
-    kept = {l.vin for l in apply_filters(listings, _search(year_min=2022))}
-    assert kept == {"B"}
+# ----- client (facet discovery + per-trim fetch) ----------------------------
 
-
-def test_dedup_by_vin():
-    listings = [_l(trim="450h+", vin="DUP"), _l(trim="450h+", vin="DUP")]
-    assert len(apply_filters(listings, _search())) == 1
-
-
-def test_empty_keywords_keeps_all_variants():
-    listings = [_l(trim="350h", vin="A"), _l(trim="250", vin="B")]
-    kept = {l.vin for l in apply_filters(listings, _search(keywords=[]))}
-    assert kept == {"A", "B"}
-
-
-class _FakeResp:
-    def __init__(self, payload, status=200):
+class _Resp:
+    def __init__(self, payload):
         self._payload = payload
-        self.status_code = status
 
     def raise_for_status(self):
         pass
@@ -74,53 +51,37 @@ class _FakeResp:
         return self._payload
 
 
-def _row(vin, price):
-    return {"vehicle": {"vin": vin, "model": "NX", "trim": "450h+"},
-            "retailListing": {"price": price, "condition": "New"}}
-
-
-class _V1Session:
-    """v1 shape: `records` key + totalCount, page-number pagination."""
-
+class _FakeSession:
     def __init__(self):
         self.calls = []
 
     def get(self, url, params=None, headers=None, timeout=None):
         self.calls.append((url, params))
-        page = (params or {}).get("page", 1)
-        row = _row("A", 53000) if page == 1 else _row("B", 51000)
-        return _FakeResp({"records": [row], "totalCount": 2})
+        if params and "includes" in params:  # facet request
+            return _Resp({"total": 1, "facets": {"trims": {
+                "450h+ Premium (945)": "u", "450h+ Luxury (200)": "u",
+                "350 Premium (3114)": "u", "350h Premium (100)": "u"}}})
+        trim = (params or {}).get("vehicle.trim")
+        rows = {
+            "450h+ Premium": [_row("A", 55999, 57810), _row("B", 56864, 57810)],
+            "450h+ Luxury": [_row("C", 60000, 64000, trim="450h+ Luxury")],
+        }.get(trim, [])
+        return _Resp({"data": rows, "links": {}})
 
 
-class _FallthroughSession:
-    """v1 endpoint returns empty; v2 endpoint returns one row of `data`."""
-
-    def __init__(self):
-        self.calls = []
-
-    def get(self, url, params=None, headers=None, timeout=None):
-        self.calls.append((url, params))
-        if "api.auto.dev" in url:  # v2
-            return _FakeResp({"data": [_row("C", 50000)], "links": {}})
-        return _FakeResp({"records": [], "totalCount": 0})  # v1 empty
+def test_discover_trims_filters_by_token():
+    client = AutoDevClient("k", session=_FakeSession())
+    assert sorted(client.discover_trims(_search())) == ["450h+ Luxury", "450h+ Premium"]
 
 
-def test_client_v1_paginates_by_page():
-    session = _V1Session()
-    client = AutoDevClient(api_key="k", session=session)
-    listings = client.search(_search())
-    assert {l.vin for l in listings} == {"A", "B"}
-    # First strategy (v1) authenticates with the apikey param.
-    assert session.calls[0][1]["make"] == "Lexus"
-    assert session.calls[0][1]["apikey"] == "k"
-    assert session.calls[1][1]["page"] == 2
+def test_search_fetches_each_trim_new_only_sorted_and_parses():
+    session = _FakeSession()
+    client = AutoDevClient("k", session=session)
+    res = client.search(_search())
+    assert {l.vin for l in res} == {"A", "B", "C"}
+    assert all(l.condition == "new" for l in res)
+    assert res[0].msrp == 57810 and res[0].discount is not None  # baseMsrp parsed
 
-
-def test_client_falls_through_to_v2_when_v1_empty():
-    session = _FallthroughSession()
-    client = AutoDevClient(api_key="k", session=session)
-    listings = client.search(_search())
-    assert {l.vin for l in listings} == {"C"}
-    # It tried v1 first (auto.dev/api/listings), then v2 (api.auto.dev).
-    assert "auto.dev/api/listings" in session.calls[0][0]
-    assert "api.auto.dev" in session.calls[1][0]
+    trim_calls = [p for (_u, p) in session.calls if p and "vehicle.trim" in p]
+    assert trim_calls and all(p.get("retailListing.used") == "false" for p in trim_calls)
+    assert all(p.get("sort") == "retailListing.price" for p in trim_calls)

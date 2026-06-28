@@ -6,24 +6,16 @@
 
 search:
   make: Lexus
-  # Auto.dev indexes Lexus by powertrain-specific model strings: `model=NX`
-  # returns ONLY the gas NX 350 (verified: 1,108 listings, zero 450h+). The
-  # plug-in hybrid lives under its own model name, so we query candidate
-  # spellings and keep whichever Auto.dev actually has inventory for.
-  # "NX 450h+" is the spelling Auto.dev's v2 feed uses for the PHEV (verified).
-  # "NX 450h" is kept as a fallback spelling.
-  models:
-    - "NX 450h+"
-    - "NX 450h"
-  # The model string now carries the variant, so no trim keyword filter needed.
-  keywords: []
-  condition: new        # new | used | all
+  model: NX
+  # Auto.dev indexes the powertrain in `vehicle.trim` (e.g. "450h+ Premium",
+  # "450h+ Luxury"). We discover every NX trim whose name contains this token
+  # and query each one — that's how the plug-in hybrid is isolated from the
+  # gas NX 350 / hybrid 350h. (Verified: ~400 NEW "450h+ Premium" alone.)
+  trim_contains: "450h"
+  condition: new        # new | used | all  (new -> retailListing.used=false)
   year_min: 2022
   year_max: null
   price_max: null
-  # Optional geo narrowing (Auto.dev supports zip + radius). Leave null for nationwide.
-  zip_code: null
-  radius_miles: null
 
 thresholds:
   # A car must beat at least one of these to be "interesting" for the alert

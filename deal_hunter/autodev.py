@@ -1,16 +1,21 @@
-"""Auto.dev listings client + filtering.
+"""Auto.dev (v2) listings client.
 
-The client fetches raw records page by page; `apply_filters` enforces the
-variant keyword, condition (new/used), and year/price bounds from config.
-Filtering is kept separate from fetching so it can be unit-tested without
-hitting the network.
+The plug-in hybrid is indexed under ``vehicle.model=NX`` with a powertrain
+``vehicle.trim`` (e.g. "450h+ Premium"). So we:
+  1. read the trims facet for the make/model,
+  2. select every trim whose name contains the configured token ("450h"),
+  3. query each trim, new-only and price-sorted, following cursor pages,
+  4. parse, de-dupe, and apply the remaining (year/price) filters.
+
+Filtering helpers are kept separate from the network so they unit-test
+without hitting the API.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Callable, Iterable, List, Mapping, Optional
+import re
+from typing import Iterable, List, Mapping, Optional
 
 import requests
 
@@ -19,164 +24,109 @@ from .models import Listing
 
 log = logging.getLogger("deal_hunter.autodev")
 
-MAX_PAGES = 250  # safety cap; v1 returns 20/page, so this covers ~5000 listings
+BASE_URL = "https://api.auto.dev/listings"
+PAGE_LIMIT = 100
+MAX_PAGES = 8  # per trim; PAGE_LIMIT * MAX_PAGES = 800 listings/trim ceiling
+
+_FACET_COUNT_RE = re.compile(r"\s*\(\d[\d,]*\)\s*$")  # strips a trailing " (945)"
 
 
-def _extract_batch(payload) -> list:
-    if not isinstance(payload, dict):
-        return payload if isinstance(payload, list) else []
-    for key in ("data", "records", "listings", "results", "hits"):
-        val = payload.get(key)
-        if isinstance(val, list):
-            return val
+def _data(payload) -> list:
+    if isinstance(payload, dict):
+        for key in ("data", "records", "listings"):
+            if isinstance(payload.get(key), list):
+                return payload[key]
     return []
-
-
-@dataclass
-class Strategy:
-    """One way to talk to Auto.dev. We try each until one returns rows."""
-
-    label: str
-    base_url: str
-    # Build the first-page query params for a make/model.
-    params: Callable[[str, str, str], dict]
-    # True if this shape authenticates via Bearer header (vs. apikey param).
-    bearer: bool
-
-
-# Auto.dev has shipped two request shapes. We don't know which a given key is
-# provisioned for and can't probe it offline, so we try both and keep the one
-# that actually returns listings.
-STRATEGIES: List[Strategy] = [
-    Strategy(
-        label="v1",
-        base_url="https://auto.dev/api/listings",
-        params=lambda mk, md, key: {"apikey": key, "make": mk, "model": md},
-        bearer=True,
-    ),
-    Strategy(
-        label="v2",
-        base_url="https://api.auto.dev/listings",
-        params=lambda mk, md, key: {"vehicle.make": mk, "vehicle.model": md, "limit": 100},
-        bearer=True,
-    ),
-]
 
 
 class AutoDevClient:
     def __init__(
         self,
         api_key: str,
-        strategies: Optional[List[Strategy]] = None,
+        base_url: str = BASE_URL,
         session: Optional[requests.Session] = None,
-        timeout: int = 30,
+        timeout: int = 40,
     ) -> None:
         if not api_key:
             raise ValueError("AUTO_DEV_API_KEY is required")
-        self.api_key = api_key
-        self.strategies = strategies or STRATEGIES
+        self.base_url = base_url
         self.timeout = timeout
         self.session = session or requests.Session()
+        self.headers = {"Authorization": f"Bearer {api_key}"}
 
-    def _get(self, url: str, params: Optional[dict], bearer: bool):
-        headers = {"Authorization": f"Bearer {self.api_key}"} if bearer else {}
-        return self.session.get(url, params=params, headers=headers, timeout=self.timeout)
+    def _get(self, url: str, params: Optional[dict]):
+        resp = self.session.get(url, params=params, headers=self.headers, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
 
-    def _paginate(self, strategy: Strategy, make: str, model: str, first_payload) -> List[Mapping]:
-        """Collect remaining pages after a strategy's first page succeeded."""
-        records: List[Mapping] = list(_extract_batch(first_payload))
-        payload = first_payload
-        page = 1
-        while page < MAX_PAGES:
-            nxt = (payload.get("links") or {}).get("next") if isinstance(payload, dict) else None
-            if nxt:  # cursor-style (v2)
-                if isinstance(nxt, str) and nxt.startswith("http"):
-                    resp = self._get(nxt, None, strategy.bearer)
-                else:
-                    p = strategy.params(make, model, self.api_key)
-                    p["cursor"] = nxt
-                    resp = self._get(strategy.base_url, p, strategy.bearer)
-            else:  # page-number style (v1)
-                total = payload.get("totalCount") or payload.get("total") if isinstance(payload, dict) else None
-                if not total or len(records) >= int(total):
-                    break
-                p = strategy.params(make, model, self.api_key)
-                p["page"] = page + 1
-                resp = self._get(strategy.base_url, p, strategy.bearer)
-            resp.raise_for_status()
-            payload = resp.json()
-            batch = _extract_batch(payload)
+    def _used_param(self, search: SearchConfig) -> dict:
+        if search.condition == "new":
+            return {"retailListing.used": "false"}
+        if search.condition == "used":
+            return {"retailListing.used": "true"}
+        return {}
+
+    def discover_trims(self, search: SearchConfig) -> List[str]:
+        """Return every trim name for make/model that contains the token."""
+        payload = self._get(
+            self.base_url,
+            {"vehicle.make": search.make, "vehicle.model": search.model,
+             "includes": "facets,total", "limit": 1},
+        )
+        trims = ((payload.get("facets") or {}).get("trims") or {}) if isinstance(payload, dict) else {}
+        token = (search.trim_contains or "").lower()
+        names = []
+        for key in trims:
+            name = _FACET_COUNT_RE.sub("", str(key)).strip()
+            if not token or token in name.lower():
+                names.append(name)
+        log.info("autodev: %d trim(s) match %r: %s", len(names), search.trim_contains, names)
+        return names
+
+    def _fetch_trim(self, search: SearchConfig, trim: str) -> List[Mapping]:
+        params: Optional[dict] = {
+            "vehicle.make": search.make,
+            "vehicle.model": search.model,
+            "vehicle.trim": trim,
+            "sort": "retailListing.price",
+            "limit": PAGE_LIMIT,
+            **self._used_param(search),
+        }
+        url = self.base_url
+        records: List[Mapping] = []
+        for _ in range(MAX_PAGES):
+            payload = self._get(url, params)
+            batch = _data(payload)
             if not batch:
                 break
             records.extend(batch)
-            page += 1
+            nxt = (payload.get("links") or {}).get("next") if isinstance(payload, dict) else None
+            if not nxt or not isinstance(nxt, str):
+                break
+            url, params = nxt, None  # `next` is a full URL
+        log.info("autodev: trim=%r -> %d row(s)", trim, len(records))
         return records
 
-    def _fetch_model(self, search: SearchConfig, model: str) -> List[Mapping]:
-        for strategy in self.strategies:
-            params = strategy.params(search.make, model, self.api_key)
-            try:
-                resp = self._get(strategy.base_url, params, strategy.bearer)
-                status = getattr(resp, "status_code", "?")
-                resp.raise_for_status()
-                payload = resp.json()
-            except Exception as exc:  # try the next shape rather than aborting
-                log.warning("autodev[%s]: %s %s -> %s", strategy.label, strategy.base_url, model, exc)
-                continue
-
-            batch = _extract_batch(payload)
-            total = payload.get("totalCount") or payload.get("total") if isinstance(payload, dict) else None
-            log.info(
-                "autodev[%s]: GET %s model=%s -> HTTP %s, %d row(s) on page 1, totalCount=%s",
-                strategy.label, strategy.base_url, model, status, len(batch), total,
-            )
-            if not batch:
-                if isinstance(payload, dict):
-                    log.warning(
-                        "autodev[%s]: empty; payload keys=%s body=%.800s",
-                        strategy.label, list(payload.keys()), payload,
-                    )
-                continue
-
-            records = self._paginate(strategy, search.make, model, payload)
-            log.info("autodev[%s]: model=%s returned %d row(s) total", strategy.label, model, len(records))
-            return records
-
-        log.warning("autodev: no strategy returned rows for model=%s", model)
-        return []
-
     def search(self, search: SearchConfig) -> List[Listing]:
-        """Fetch every configured model, parse, then filter."""
+        trims = self.discover_trims(search)
         raw: List[Mapping] = []
-        for model in search.models:
-            raw.extend(self._fetch_model(search, model))
+        for trim in trims:
+            raw.extend(self._fetch_trim(search, trim))
         listings = [Listing.from_record(r) for r in raw]
         if listings:
             s = listings[0]
-            log.info(
-                "autodev: parsed %d record(s); sample -> %s price=%s msrp=%s condition=%r",
-                len(listings), s.label, s.price, s.msrp, s.condition,
-            )
+            log.info("autodev: parsed %d record(s); sample -> %s price=%s msrp=%s condition=%r",
+                     len(listings), s.label, s.price, s.msrp, s.condition)
         return apply_filters(listings, search)
 
 
-def _matches_keywords(listing: Listing, keywords: Iterable[str]) -> bool:
-    kws = [k.lower() for k in keywords if k]
-    if not kws:
-        return True
-    hay = f"{listing.model} {listing.trim}".lower()
-    return any(k in hay for k in kws)
-
-
 def apply_filters(listings: Iterable[Listing], search: SearchConfig) -> List[Listing]:
+    """Trim is already selected server-side; enforce the remaining bounds."""
     listings = list(listings)
     out: List[Listing] = []
     seen_vins: set[str] = set()
-    dropped = {"keyword": 0, "condition": 0, "year": 0, "price": 0, "dupe": 0}
+    dropped = {"condition": 0, "year": 0, "price": 0, "dupe": 0}
     for l in listings:
-        if not _matches_keywords(l, search.keywords):
-            dropped["keyword"] += 1
-            continue
         if search.condition in ("new", "used") and l.condition and l.condition != search.condition:
             dropped["condition"] += 1
             continue
@@ -189,7 +139,6 @@ def apply_filters(listings: Iterable[Listing], search: SearchConfig) -> List[Lis
         if search.price_max is not None and l.price is not None and l.price > search.price_max:
             dropped["price"] += 1
             continue
-        # De-dupe by VIN (the same car can appear across pages/dealers).
         if l.vin:
             if l.vin in seen_vins:
                 dropped["dupe"] += 1
