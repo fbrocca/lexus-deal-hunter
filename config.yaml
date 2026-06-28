@@ -6,12 +6,17 @@
 
 search:
   make: Lexus
+  # Auto.dev indexes Lexus by powertrain-specific model strings: `model=NX`
+  # returns ONLY the gas NX 350 (verified: 1,108 listings, zero 450h+). The
+  # plug-in hybrid lives under its own model name, so we query candidate
+  # spellings and keep whichever Auto.dev actually has inventory for.
   models:
-    - NX
-  # Variant filter applied to "<model> <trim>". Keep only listings whose
-  # model/trim mentions one of these tokens. Empty list = no variant filter.
-  keywords:
-    - "450h"
+    - "NX 450h+"
+    - "NX 450h"
+    - "NX450h+"
+    - "NX 450h Plus"
+  # The model string now carries the variant, so no trim keyword filter needed.
+  keywords: []
   condition: new        # new | used | all
   year_min: 2022
   year_max: null

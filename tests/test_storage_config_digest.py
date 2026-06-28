@@ -27,8 +27,8 @@ def test_load_snapshot_missing_file(tmp_path):
 def test_load_config_reads_lexus_defaults():
     cfg = load_config(Path(__file__).resolve().parent.parent / "config.yaml")
     assert cfg.search.make == "Lexus"
-    assert cfg.search.models == ["NX"]
-    assert "450h" in cfg.search.keywords
+    # Targets the plug-in hybrid via powertrain-specific model strings.
+    assert any("450h" in m for m in cfg.search.models)
     assert cfg.search.condition == "new"
 
 
