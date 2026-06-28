@@ -63,8 +63,9 @@ def test_empty_keywords_keeps_all_variants():
 
 
 class _FakeResp:
-    def __init__(self, payload):
+    def __init__(self, payload, status=200):
         self._payload = payload
+        self.status_code = status
 
     def raise_for_status(self):
         pass
@@ -73,37 +74,53 @@ class _FakeResp:
         return self._payload
 
 
-class _FakeSession:
-    """Returns two pages of `data`, linked by a cursor, then stops."""
+def _row(vin, price):
+    return {"vehicle": {"vin": vin, "model": "NX", "trim": "450h+"},
+            "retailListing": {"price": price, "condition": "New"}}
+
+
+class _V1Session:
+    """v1 shape: `records` key + totalCount, page-number pagination."""
 
     def __init__(self):
         self.calls = []
 
     def get(self, url, params=None, headers=None, timeout=None):
         self.calls.append((url, params))
-        if not params or "cursor" not in params:
-            return _FakeResp(
-                {
-                    "data": [{"vehicle": {"vin": "A", "model": "NX", "trim": "450h+"},
-                              "retailListing": {"price": 53000, "condition": "New"}}],
-                    "links": {"next": "TOKEN2"},
-                }
-            )
-        return _FakeResp(
-            {
-                "data": [{"vehicle": {"vin": "B", "model": "NX", "trim": "450h+"},
-                          "retailListing": {"price": 51000, "condition": "New"}}],
-                "links": {},
-            }
-        )
+        page = (params or {}).get("page", 1)
+        row = _row("A", 53000) if page == 1 else _row("B", 51000)
+        return _FakeResp({"records": [row], "totalCount": 2})
 
 
-def test_client_reads_data_key_and_follows_cursor():
-    session = _FakeSession()
+class _FallthroughSession:
+    """v1 endpoint returns empty; v2 endpoint returns one row of `data`."""
+
+    def __init__(self):
+        self.calls = []
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.calls.append((url, params))
+        if "api.auto.dev" in url:  # v2
+            return _FakeResp({"data": [_row("C", 50000)], "links": {}})
+        return _FakeResp({"records": [], "totalCount": 0})  # v1 empty
+
+
+def test_client_v1_paginates_by_page():
+    session = _V1Session()
     client = AutoDevClient(api_key="k", session=session)
     listings = client.search(_search())
     assert {l.vin for l in listings} == {"A", "B"}
-    # Two requests: initial + one cursor follow.
-    assert len(session.calls) == 2
-    assert session.calls[0][1] == {"vehicle.make": "Lexus", "vehicle.model": "NX"}
-    assert session.calls[1][1]["cursor"] == "TOKEN2"
+    # First strategy (v1) authenticates with the apikey param.
+    assert session.calls[0][1]["make"] == "Lexus"
+    assert session.calls[0][1]["apikey"] == "k"
+    assert session.calls[1][1]["page"] == 2
+
+
+def test_client_falls_through_to_v2_when_v1_empty():
+    session = _FallthroughSession()
+    client = AutoDevClient(api_key="k", session=session)
+    listings = client.search(_search())
+    assert {l.vin for l in listings} == {"C"}
+    # It tried v1 first (auto.dev/api/listings), then v2 (api.auto.dev).
+    assert "auto.dev/api/listings" in session.calls[0][0]
+    assert "api.auto.dev" in session.calls[1][0]
