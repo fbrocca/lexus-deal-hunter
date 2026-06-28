@@ -149,7 +149,15 @@ class AutoDevClient:
         raw: List[Mapping] = []
         for model in search.models:
             raw.extend(self._fetch_model(search, model))
+        if raw:
+            log.info("autodev: sample raw record=%.1200s", raw[0])
         listings = [Listing.from_record(r) for r in raw]
+        if listings:
+            s = listings[0]
+            log.info(
+                "autodev: sample parsed -> year=%s make=%r model=%r trim=%r price=%s condition=%r",
+                s.year, s.make, s.model, s.trim, s.price, s.condition,
+            )
         return apply_filters(listings, search)
 
 
@@ -162,23 +170,32 @@ def _matches_keywords(listing: Listing, keywords: Iterable[str]) -> bool:
 
 
 def apply_filters(listings: Iterable[Listing], search: SearchConfig) -> List[Listing]:
+    listings = list(listings)
     out: List[Listing] = []
     seen_vins: set[str] = set()
+    dropped = {"keyword": 0, "condition": 0, "year": 0, "price": 0, "dupe": 0}
     for l in listings:
         if not _matches_keywords(l, search.keywords):
+            dropped["keyword"] += 1
             continue
         if search.condition in ("new", "used") and l.condition and l.condition != search.condition:
+            dropped["condition"] += 1
             continue
         if search.year_min is not None and l.year is not None and l.year < search.year_min:
+            dropped["year"] += 1
             continue
         if search.year_max is not None and l.year is not None and l.year > search.year_max:
+            dropped["year"] += 1
             continue
         if search.price_max is not None and l.price is not None and l.price > search.price_max:
+            dropped["price"] += 1
             continue
         # De-dupe by VIN (the same car can appear across pages/dealers).
         if l.vin:
             if l.vin in seen_vins:
+                dropped["dupe"] += 1
                 continue
             seen_vins.add(l.vin)
         out.append(l)
+    log.info("filter funnel: in=%d kept=%d dropped=%s", len(listings), len(out), dropped)
     return out
