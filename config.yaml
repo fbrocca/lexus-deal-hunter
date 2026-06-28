@@ -33,7 +33,7 @@ thresholds:
   max_price: null           # or under this absolute price
 
 email:
-  subject_prefix: "[Lexus NX 450h+]"
+  subject_prefix: "Lexus NX 450h+"
   # Number of rows in the "cheapest" table of the daily digest.
   top_n_cheapest: 10
   # Number of rows in the "biggest discount" table.
