@@ -1,5 +1,5 @@
-"""Probe #2: enumerate Lexus NX inventory via Auto.dev facets/aggregations,
-so we find the correct way to query the NEW NX 450h+ (not guess model strings)."""
+"""Probe #3: the 450h+ lives under vehicle.model=NX + vehicle.trim='450h+ ...'.
+Enumerate the 450h+ trims, confirm the new-only filter, and check sorting."""
 
 import json
 import os
@@ -8,15 +8,6 @@ import requests
 
 KEY = os.environ["AUTO_DEV_API_KEY"]
 BEARER = {"Authorization": f"Bearer {KEY}"}
-
-
-def v1(params):
-    r = requests.get("https://auto.dev/api/listings",
-                     params={"apikey": KEY, **params}, timeout=40)
-    try:
-        return r.json()
-    except Exception:
-        return {"_raw": r.text[:300]}
 
 
 def v2(params):
@@ -28,26 +19,43 @@ def v2(params):
         return {"_raw": r.text[:300]}
 
 
-print("===== V1: all Lexus, dump aggregations/facets =====", flush=True)
-p = v1({"make": "Lexus"})
-print("V1 keys:", list(p.keys()), "total:", p.get("totalCount"), flush=True)
-print("V1 promotedAggregations:", json.dumps(p.get("promotedAggregations"))[:3000], flush=True)
-
-print("===== V1: model-string counts =====", flush=True)
-for m in ["NX 450h+", "NX 450h", "NX450h+", "NX 450h Plus", "NX450h", "NX 450", "NX450H+", "NX 450H+"]:
-    p = v1({"make": "Lexus", "model": m})
-    print(f"  V1 model={m!r}: totalCount={p.get('totalCount')}", flush=True)
-
-print("===== V1: NX with new-only + fuel filters (guess param names) =====", flush=True)
-for extra in [{"condition": "New"}, {"fuel_type": "Plug-in Hybrid"}, {"fuelType": "Hybrid"},
-              {"trim": "450h+"}, {"body_type": "SUV", "min_price": 50000}]:
-    p = v1({"make": "Lexus", "model": "NX", **extra})
-    recs = p.get("records") or []
-    trims = sorted({str((r or {}).get("trim", "")) for r in recs})[:8]
-    print(f"  V1 NX + {extra}: total={p.get('totalCount')} sampleTrims={trims}", flush=True)
-
-print("===== V2: NX facets =====", flush=True)
+# 1) All facet categories + every 450h+ trim name.
 p = v2({"vehicle.model": "NX", "includes": "facets,total", "limit": 1})
-print("V2 keys:", list(p.keys()), "total:", p.get("total"), flush=True)
-print("V2 facets:", json.dumps(p.get("facets"))[:3000], flush=True)
-print("V2 discover:", json.dumps(p.get("discover"))[:1500], flush=True)
+fac = p.get("facets") or {}
+print("facet categories:", list(fac.keys()), flush=True)
+trims = fac.get("trims") or {}
+h450 = [k for k in trims if "450" in k]
+print("450h+ trims:", json.dumps(h450), flush=True)
+for k in fac:
+    if k not in ("years", "makes", "models", "trims"):
+        print("FACET", k, "=", json.dumps(fac[k])[:600], flush=True)
+
+# 2) Confirm a trim query + the new-only filter param.
+def total_of(params):
+    q = v2({**params, "includes": "total", "limit": 1})
+    yr = None
+    used = None
+    if q.get("data"):
+        v = q["data"][0]
+        yr = (v.get("vehicle") or {}).get("year")
+        used = (v.get("retailListing") or {}).get("used")
+    return q.get("total"), yr, used
+
+for params in [
+    {"vehicle.model": "NX", "vehicle.trim": "450h+ Premium"},
+    {"vehicle.model": "NX", "vehicle.trim": "450h+ Premium", "retailListing.used": "false"},
+    {"vehicle.model": "NX", "vehicle.trim": "450h+ Premium", "retailListing.used": "true"},
+    {"vehicle.model": "NX", "vehicle.trim": "450h+ Premium", "retailListing.used": "false",
+     "sort": "retailListing.price"},
+]:
+    print(params, "->", total_of(params), flush=True)
+
+# 3) Sample cheapest NEW 450h+ record (verify fields).
+q = v2({"vehicle.model": "NX", "vehicle.trim": "450h+ Premium", "retailListing.used": "false",
+        "sort": "retailListing.price", "limit": 3})
+for v in (q.get("data") or [])[:3]:
+    rl = v.get("retailListing") or {}
+    ve = v.get("vehicle") or {}
+    print(f"  NEW? used={rl.get('used')} yr={ve.get('year')} trim={ve.get('trim')} "
+          f"price={rl.get('price')} msrp={ve.get('baseMsrp')} miles={rl.get('miles')} "
+          f"dealer={rl.get('dealer')} {rl.get('city')},{rl.get('state')}", flush=True)
