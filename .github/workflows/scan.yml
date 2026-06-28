@@ -2,8 +2,9 @@ name: Lexus deal scan
 
 on:
   schedule:
-    # 08:00  and 20:00 UTC daily
-    - cron: "0 8,20 * * *"
+    # Every 3 days at 13:00 UTC (days 1,4,7,…). New 450h+ inventory is sparse,
+    # so daily is overkill.
+    - cron: "0 13 */3 * *"
   workflow_dispatch: {}
 
 permissions:
@@ -17,9 +18,9 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
