@@ -50,3 +50,46 @@ def test_discount_none_when_no_msrp():
     l = Listing.from_record({"vin": "v", "price": "54000"})
     assert l.discount is None
     assert l.discount_pct is None
+
+
+def test_used_and_cpo_booleans_map_to_condition():
+    used = Listing.from_record({"vin": "v", "retailListing": {"used": True, "miles": 27531, "vdp": "http://d/x"}})
+    assert used.condition == "used"
+    assert used.mileage == 27531
+    assert used.url == "http://d/x"
+
+    new = Listing.from_record({"vin": "v", "retailListing": {"used": False}})
+    assert new.condition == "new"
+
+
+def test_from_record_flattens_v2_nested_objects():
+    # Shape of an Auto.dev v2 listing: data nested under vehicle/retailListing.
+    rec = {
+        "vehicle": {
+            "vin": "JTJ123",
+            "year": 2024,
+            "make": "Lexus",
+            "model": "NX",
+            "trim": "450h+ Luxury",
+            "mileage": 8,
+        },
+        "retailListing": {
+            "price": 53000,
+            "msrp": 61000,
+            "condition": "New",
+            "dealerName": "Lexus of Somewhere",
+            "city": "Austin",
+            "state": "TX",
+            "vdpUrl": "https://example.com/jtj123",
+        },
+    }
+    l = Listing.from_record(rec)
+    assert l.vin == "JTJ123"
+    assert l.make == "Lexus"
+    assert l.trim == "450h+ Luxury"
+    assert l.price == 53000.0
+    assert l.msrp == 61000.0
+    assert l.condition == "new"
+    assert l.discount_pct == 13.1
+    assert l.city == "Austin"
+    assert l.url == "https://example.com/jtj123"

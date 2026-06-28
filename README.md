@@ -1,7 +1,8 @@
 # lexus-deal-hunter
 
 Daily scanner for **Lexus NX 450h+** (the plug-in hybrid) listings, built on the
-[Auto.dev](https://auto.dev) listings API. Every run ranks the market by
+[Auto.dev](https://auto.dev) v2 listings API (`https://api.auto.dev/listings`,
+Bearer auth, dotted `vehicle.*` params, cursor pagination). Every run ranks the market by
 **cheapest price** and **biggest discount off MSRP**, flags **day-over-day price
 drops**, and emails a digest.
 
@@ -72,10 +73,21 @@ autodev: model=NX returned N row(s)
 after filtering: M listing(s)
 ```
 
-If `N = 0`, Auto.dev indexes the model under a different name — adjust
-`search.models` / `search.keywords` in `config.yaml`. (`discount` ranking
-depends on the API returning an MSRP field per listing; if MSRPs come back
-empty, the "biggest discount" section stays empty while "cheapest" still works.)
+The client queries Auto.dev by `vehicle.make` + `vehicle.model` only and applies
+every other filter (year, condition, the `450h` keyword, price) client-side, so a
+mistyped filter param can't silently zero out the results. If `N = 0`, Auto.dev
+indexes the model under a different name — adjust `search.models` in `config.yaml`.
+(`discount` ranking depends on the API returning an MSRP field per listing; if
+MSRPs come back empty, the "biggest discount" section stays empty while "cheapest"
+still works.)
+
+### Email / Gmail note
+
+If SMTP fails with `535 BadCredentials`, Gmail is rejecting the login. Gmail does
+not accept your normal account password over SMTP — create an **App Password**
+(Google Account → Security → 2-Step Verification → App passwords), set `SMTP_USER`
+to the full Gmail address and `SMTP_PASSWORD` to the 16-character app password,
+with `SMTP_HOST=smtp.gmail.com` and `SMTP_PORT=587`.
 
 ## Tests
 

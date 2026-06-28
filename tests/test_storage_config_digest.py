@@ -27,28 +27,36 @@ def test_load_snapshot_missing_file(tmp_path):
 def test_load_config_reads_lexus_defaults():
     cfg = load_config(Path(__file__).resolve().parent.parent / "config.yaml")
     assert cfg.search.make == "Lexus"
-    assert cfg.search.models == ["NX"]
-    assert "450h" in cfg.search.keywords
+    assert cfg.search.model == "NX"
+    # Targets the plug-in hybrid via the trim token.
+    assert "450h" in cfg.search.trim_contains
     assert cfg.search.condition == "new"
 
 
-def test_build_digest_text_contains_sections():
+def test_build_digest_html_contains_sections():
     listings = [_l("A", 54000, 60000), _l("B", 49000)]
     cheapest = analyze.rank_cheapest(listings, 10)
-    discounts = analyze.rank_by_discount(listings, 10)
     drops = analyze.find_price_drops(listings, {"A": 56000})
 
-    from deal_hunter.config import EmailConfig
+    from deal_hunter.config import EmailConfig, ThresholdConfig
 
-    subject, body = build_digest(
-        EmailConfig(subject_prefix="[Lexus NX 450h+]"),
+    subject, text, html = build_digest(
+        EmailConfig(subject_prefix="Lexus NX 450h+"),
+        ThresholdConfig(min_discount_pct=8.0),
+        date="2026-06-28",
+        model_desc="Lexus NX 450h+ (new), nationwide",
         listings=listings,
         cheapest=cheapest,
-        discounts=discounts,
         drops=drops,
+        previous={"A": 56000},
     )
-    assert "[Lexus NX 450h+]" in subject
-    assert "CHEAPEST" in body
-    assert "BIGGEST DISCOUNT OFF MSRP" in body
-    assert "PRICE DROPS SINCE LAST RUN" in body
-    assert "$49,000" in body
+    assert "Lexus NX 450h+" in subject and "2 " in subject
+    # HTML structure
+    assert "Lexus deal report — 2026-06-28" in html
+    assert "Top 10 cheapest" in html
+    assert "Flagged deals" in html          # the 10% discount listing clears 8%
+    assert "Price drops" in html
+    assert "% off MSRP" in html
+    assert "$49,000" in html
+    # plain-text fallback present
+    assert "TOP 10 CHEAPEST" in text

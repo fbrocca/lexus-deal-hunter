@@ -6,9 +6,9 @@ the code works with typed attributes instead of dict lookups.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import yaml
 
@@ -16,16 +16,14 @@ import yaml
 @dataclass(frozen=True)
 class SearchConfig:
     make: str
-    models: List[str]
-    # Variant filter applied to "<model> <trim>" — keep only listings that
-    # mention one of these tokens (case-insensitive). Empty = keep everything.
-    keywords: List[str] = field(default_factory=list)
+    model: str
+    # Auto.dev indexes powertrain in `vehicle.trim` (e.g. "450h+ Premium").
+    # We discover every trim whose name contains this token and query each.
+    trim_contains: str = ""
     condition: str = "new"  # new | used | all
     year_min: Optional[int] = None
     year_max: Optional[int] = None
     price_max: Optional[int] = None
-    zip_code: Optional[str] = None
-    radius_miles: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -65,8 +63,8 @@ def load_config(path: str | Path) -> Config:
     raw = yaml.safe_load(Path(path).read_text()) or {}
 
     search_raw = _clean(raw.get("search"))
-    if "make" not in search_raw or "models" not in search_raw:
-        raise ValueError("config.search must define 'make' and 'models'")
+    if "make" not in search_raw or "model" not in search_raw:
+        raise ValueError("config.search must define 'make' and 'model'")
 
     return Config(
         search=SearchConfig(**search_raw),

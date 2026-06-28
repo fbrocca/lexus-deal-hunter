@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from datetime import date
 from typing import List
 
 from . import analyze
@@ -52,25 +53,43 @@ def main(argv: List[str] | None = None) -> int:
     log.info("after filtering: %d listing(s)", len(listings))
 
     cheapest = analyze.rank_cheapest(listings, cfg.email.top_n_cheapest)
-    discounts = analyze.rank_by_discount(listings, cfg.email.top_n_discount)
 
     previous = load_snapshot(cfg.storage.snapshot_path)
     drops = analyze.find_price_drops(listings, previous)
     log.info("detected %d price drop(s)", len(drops))
 
-    subject, body = build_digest(
+    today = date.today().isoformat()
+    variant = f" {cfg.search.trim_contains}".rstrip()
+    model_desc = f"{cfg.search.make} {cfg.search.model}{variant} ({cfg.search.condition}), nationwide"
+    subject, text, html = build_digest(
         cfg.email,
+        cfg.thresholds,
+        date=today,
+        model_desc=model_desc,
         listings=listings,
         cheapest=cheapest,
-        discounts=discounts,
         drops=drops,
+        previous=previous,
     )
 
     if dry_run:
-        print(f"Subject: {subject}\n\n{body}")
+        out_path = os.environ.get("DRY_RUN_HTML", "digest_preview.html")
+        with open(out_path, "w") as fh:
+            fh.write(html)
+        print(f"Subject: {subject}\n\n{text}\n[HTML written to {out_path}]")
+    elif not listings and not drops:
+        # Nothing to report — skip the email (and the SMTP round-trip) entirely
+        # rather than send an empty digest or fail a run with no content.
+        log.info("no listings and no drops; skipping email")
     else:
-        send_email(_smtp_from_env(), subject, body)
-        log.info("digest sent: %s", subject)
+        smtp = _smtp_from_env()
+        if not smtp.email_to:
+            raise SystemExit(
+                "EMAIL_TO is empty — set the EMAIL_TO secret to one or more "
+                "comma-separated recipient addresses."
+            )
+        send_email(smtp, subject, text, html)
+        log.info("digest sent to %s: %s", ", ".join(smtp.email_to), subject)
 
     # Persist today's prices for tomorrow's diff (only when we actually got data,
     # so a transient empty fetch doesn't wipe history).

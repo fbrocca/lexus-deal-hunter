@@ -6,19 +6,16 @@
 
 search:
   make: Lexus
-  models:
-    - NX
-  # Variant filter applied to "<model> <trim>". Keep only listings whose
-  # model/trim mentions one of these tokens. Empty list = no variant filter.
-  keywords:
-    - "450h"
-  condition: new        # new | used | all
+  model: NX
+  # Auto.dev indexes the powertrain in `vehicle.trim` (e.g. "450h+ Premium",
+  # "450h+ Luxury"). We discover every NX trim whose name contains this token
+  # and query each one — that's how the plug-in hybrid is isolated from the
+  # gas NX 350 / hybrid 350h. (Verified: ~400 NEW "450h+ Premium" alone.)
+  trim_contains: "450h"
+  condition: new        # new | used | all  (new -> retailListing.used=false)
   year_min: 2022
   year_max: null
   price_max: null
-  # Optional geo narrowing (Auto.dev supports zip + radius). Leave null for nationwide.
-  zip_code: null
-  radius_miles: null
 
 thresholds:
   # A car must beat at least one of these to be "interesting" for the alert
@@ -28,7 +25,7 @@ thresholds:
   max_price: null           # or under this absolute price
 
 email:
-  subject_prefix: "[Lexus NX 450h+]"
+  subject_prefix: "Lexus NX 450h+"
   # Number of rows in the "cheapest" table of the daily digest.
   top_n_cheapest: 10
   # Number of rows in the "biggest discount" table.

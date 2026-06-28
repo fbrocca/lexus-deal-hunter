@@ -42,6 +42,29 @@ def _first(record: Mapping[str, Any], keys: Sequence[str]) -> Any:
     return None
 
 
+def flatten_record(record: Mapping[str, Any]) -> dict:
+    """Collapse Auto.dev's nested objects into one flat lookup.
+
+    v2 listings nest data under ``vehicle`` and ``retailListing`` objects
+    (e.g. ``vehicle.make``, ``retailListing.price``). We flatten scalar leaves
+    from those nested objects up to the top level so the candidate-key lookups
+    in ``from_record`` resolve regardless of where a field lives. Nested values
+    win over top-level scalars of the same name.
+    """
+    scalars: dict = {}
+    nested: dict = {}
+    for k, v in record.items():
+        if isinstance(v, dict):
+            for kk, vv in v.items():
+                if not isinstance(vv, (dict, list)):
+                    nested[kk] = vv
+        elif not isinstance(v, list):
+            scalars[k] = v
+    merged = dict(scalars)
+    merged.update(nested)
+    return merged
+
+
 @dataclass
 class Listing:
     vin: str
@@ -78,12 +101,19 @@ class Listing:
         return " ".join(p for p in parts if p).strip()
 
     @classmethod
-    def from_record(cls, r: Mapping[str, Any]) -> "Listing":
+    def from_record(cls, record: Mapping[str, Any]) -> "Listing":
+        r = flatten_record(record)
+        # Auto.dev v2 encodes new/used as booleans (`used`, `cpo`) in
+        # retailListing; v1 uses a `condition` string. Handle both.
+        used_flag = r.get("used")
+        cpo_flag = r.get("cpo")
         raw_condition = str(_first(r, ["condition", "inventoryType", "type"]) or "").lower()
-        if "new" in raw_condition:
-            condition = "new"
-        elif "used" in raw_condition or "cpo" in raw_condition or "certified" in raw_condition:
+        if used_flag is True or cpo_flag is True or any(
+            w in raw_condition for w in ("used", "cpo", "certified")
+        ):
             condition = "used"
+        elif used_flag is False or "new" in raw_condition:
+            condition = "new"
         else:
             condition = ""
 
@@ -94,12 +124,12 @@ class Listing:
             model=str(_first(r, ["model", "modelName"]) or "").strip(),
             trim=str(_first(r, ["trim", "trimName", "trimLevel"]) or "").strip(),
             price=parse_money(_first(r, ["price", "priceUnformatted", "listPrice", "salePrice"])),
-            msrp=parse_money(_first(r, ["msrp", "msrpUnformatted", "priceMsrp", "originalPrice", "retailValue"])),
+            msrp=parse_money(_first(r, ["msrp", "msrpUnformatted", "priceMsrp", "baseMsrp", "originalPrice", "retailValue"])),
             mileage=parse_int(_first(r, ["mileage", "miles", "odometer"])),
             condition=condition,
             dealer=str(_first(r, ["dealerName", "dealer", "sellerName"]) or "").strip(),
             city=str(_first(r, ["city", "dealerCity"]) or "").strip(),
             state=str(_first(r, ["state", "dealerState"]) or "").strip(),
-            url=str(_first(r, ["clickoffUrl", "vdpUrl", "detailUrl", "url", "link"]) or "").strip(),
-            photo=str(_first(r, ["primaryPhotoUrl", "photoUrl", "thumbnail", "image"]) or "").strip(),
+            url=str(_first(r, ["clickoffUrl", "vdpUrl", "vdp", "detailUrl", "url", "link"]) or "").strip(),
+            photo=str(_first(r, ["primaryPhotoUrl", "photoUrl", "primaryImage", "thumbnail", "image"]) or "").strip(),
         )
