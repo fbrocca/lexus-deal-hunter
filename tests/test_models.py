@@ -52,6 +52,16 @@ def test_discount_none_when_no_msrp():
     assert l.discount_pct is None
 
 
+def test_used_and_cpo_booleans_map_to_condition():
+    used = Listing.from_record({"vin": "v", "retailListing": {"used": True, "miles": 27531, "vdp": "http://d/x"}})
+    assert used.condition == "used"
+    assert used.mileage == 27531
+    assert used.url == "http://d/x"
+
+    new = Listing.from_record({"vin": "v", "retailListing": {"used": False}})
+    assert new.condition == "new"
+
+
 def test_from_record_flattens_v2_nested_objects():
     # Shape of an Auto.dev v2 listing: data nested under vehicle/retailListing.
     rec = {

@@ -103,11 +103,17 @@ class Listing:
     @classmethod
     def from_record(cls, record: Mapping[str, Any]) -> "Listing":
         r = flatten_record(record)
+        # Auto.dev v2 encodes new/used as booleans (`used`, `cpo`) in
+        # retailListing; v1 uses a `condition` string. Handle both.
+        used_flag = r.get("used")
+        cpo_flag = r.get("cpo")
         raw_condition = str(_first(r, ["condition", "inventoryType", "type"]) or "").lower()
-        if "new" in raw_condition:
-            condition = "new"
-        elif "used" in raw_condition or "cpo" in raw_condition or "certified" in raw_condition:
+        if used_flag is True or cpo_flag is True or any(
+            w in raw_condition for w in ("used", "cpo", "certified")
+        ):
             condition = "used"
+        elif used_flag is False or "new" in raw_condition:
+            condition = "new"
         else:
             condition = ""
 
@@ -124,6 +130,6 @@ class Listing:
             dealer=str(_first(r, ["dealerName", "dealer", "sellerName"]) or "").strip(),
             city=str(_first(r, ["city", "dealerCity"]) or "").strip(),
             state=str(_first(r, ["state", "dealerState"]) or "").strip(),
-            url=str(_first(r, ["clickoffUrl", "vdpUrl", "detailUrl", "url", "link"]) or "").strip(),
-            photo=str(_first(r, ["primaryPhotoUrl", "photoUrl", "thumbnail", "image"]) or "").strip(),
+            url=str(_first(r, ["clickoffUrl", "vdpUrl", "vdp", "detailUrl", "url", "link"]) or "").strip(),
+            photo=str(_first(r, ["primaryPhotoUrl", "photoUrl", "primaryImage", "thumbnail", "image"]) or "").strip(),
         )
