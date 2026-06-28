@@ -1,0 +1,51 @@
+name: Lexus deal scan
+
+on:
+  schedule:
+    # 08:00  and 20:00 UTC daily
+    - cron: "0 8,20 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # to commit the updated price snapshot back
+
+concurrency:
+  group: lexus-deal-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scan + send digest
+        env:
+          AUTO_DEV_API_KEY: ${{ secrets.AUTO_DEV_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python -m deal_hunter config.yaml
+
+      - name: Commit updated snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data/)" ]; then
+            git add data/
+            git commit -m "chore: update price snapshot [skip ci]"
+            git push
+          else
+            echo "No snapshot changes."
+          fi
