@@ -73,8 +73,14 @@ def main(argv: List[str] | None = None) -> int:
         # rather than send an empty digest or fail a run with no content.
         log.info("no listings and no drops; skipping email")
     else:
-        send_email(_smtp_from_env(), subject, body)
-        log.info("digest sent: %s", subject)
+        smtp = _smtp_from_env()
+        if not smtp.email_to:
+            raise SystemExit(
+                "EMAIL_TO is empty — set the EMAIL_TO secret to one or more "
+                "comma-separated recipient addresses."
+            )
+        send_email(smtp, subject, body)
+        log.info("digest sent to %s: %s", ", ".join(smtp.email_to), subject)
 
     # Persist today's prices for tomorrow's diff (only when we actually got data,
     # so a transient empty fetch doesn't wipe history).

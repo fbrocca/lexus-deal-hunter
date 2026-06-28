@@ -48,17 +48,29 @@ class AutoDevClient:
         records: List[Mapping] = []
         url: str = self.base_url
         params: Optional[dict] = {"vehicle.make": search.make, "vehicle.model": model}
-        for _ in range(MAX_PAGES):
+        for page in range(MAX_PAGES):
             resp = self.session.get(
                 url,
                 params=params,
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 timeout=self.timeout,
             )
+            if page == 0:
+                log.info(
+                    "autodev: GET %s params=%s -> HTTP %s",
+                    url, params, getattr(resp, "status_code", "?"),
+                )
             resp.raise_for_status()
             payload = resp.json()
             batch = payload.get("data") or payload.get("records") or payload.get("listings") or []
             if not batch:
+                # Surface why a 200 came back empty so it can be diagnosed from
+                # the run log without live access to the API.
+                if page == 0 and isinstance(payload, dict):
+                    log.warning(
+                        "autodev: empty result; payload keys=%s body=%.600s",
+                        list(payload.keys()), payload,
+                    )
                 break
             records.extend(batch)
             nxt = (payload.get("links") or {}).get("next")
