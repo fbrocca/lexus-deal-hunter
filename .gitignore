@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IMPORTANT: data/ snapshots are tracked artifacts (day-over-day price history).
+# Do NOT ignore them. Only ignore local scratch files.
+*.log
