@@ -118,7 +118,7 @@ class Listing:
             model=str(_first(r, ["model", "modelName"]) or "").strip(),
             trim=str(_first(r, ["trim", "trimName", "trimLevel"]) or "").strip(),
             price=parse_money(_first(r, ["price", "priceUnformatted", "listPrice", "salePrice"])),
-            msrp=parse_money(_first(r, ["msrp", "msrpUnformatted", "priceMsrp", "originalPrice", "retailValue"])),
+            msrp=parse_money(_first(r, ["msrp", "msrpUnformatted", "priceMsrp", "baseMsrp", "originalPrice", "retailValue"])),
             mileage=parse_int(_first(r, ["mileage", "miles", "odometer"])),
             condition=condition,
             dealer=str(_first(r, ["dealerName", "dealer", "sellerName"]) or "").strip(),
