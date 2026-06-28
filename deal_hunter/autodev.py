@@ -15,11 +15,11 @@ from typing import Callable, Iterable, List, Mapping, Optional
 import requests
 
 from .config import SearchConfig
-from .models import Listing
+from .models import Listing, flatten_record
 
 log = logging.getLogger("deal_hunter.autodev")
 
-MAX_PAGES = 30  # safety cap on pagination
+MAX_PAGES = 250  # safety cap; v1 returns 20/page, so this covers ~5000 listings
 
 
 def _extract_batch(payload) -> list:
@@ -125,9 +125,10 @@ class AutoDevClient:
                 continue
 
             batch = _extract_batch(payload)
+            total = payload.get("totalCount") or payload.get("total") if isinstance(payload, dict) else None
             log.info(
-                "autodev[%s]: GET %s model=%s -> HTTP %s, %d row(s) on page 1",
-                strategy.label, strategy.base_url, model, status, len(batch),
+                "autodev[%s]: GET %s model=%s -> HTTP %s, %d row(s) on page 1, totalCount=%s",
+                strategy.label, strategy.base_url, model, status, len(batch), total,
             )
             if not batch:
                 if isinstance(payload, dict):
@@ -150,7 +151,17 @@ class AutoDevClient:
         for model in search.models:
             raw.extend(self._fetch_model(search, model))
         if raw:
-            log.info("autodev: sample raw record=%.1200s", raw[0])
+            log.info("autodev: sample raw record=%.800s", raw[0])
+            # How is the target variant spelled? Show the trim distribution so the
+            # keyword filter can be matched to reality.
+            trims: dict = {}
+            for r in raw:
+                t = str(flatten_record(r).get("trim", "")).strip()
+                trims[t] = trims.get(t, 0) + 1
+            with_450 = {t: c for t, c in trims.items() if "450" in t.lower()}
+            log.info("autodev: fetched=%d distinct trims=%d; trims containing '450'=%s",
+                     len(raw), len(trims), with_450 or "NONE")
+            log.info("autodev: all trims=%s", dict(sorted(trims.items(), key=lambda kv: -kv[1])))
         listings = [Listing.from_record(r) for r in raw]
         if listings:
             s = listings[0]
